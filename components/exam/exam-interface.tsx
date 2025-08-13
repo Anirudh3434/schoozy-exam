@@ -38,6 +38,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
     setError(null)
     try {
       const response = await axios.get("https://schoozy.in/api/exam/get-question", {
+        withCredentials: true,
         params: {
           question_number: questionNumber,
         },
