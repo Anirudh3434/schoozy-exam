@@ -13,53 +13,74 @@ interface ExamInterfaceProps {
   onUpdateState: (updates: Partial<ExamState>) => void
 }
 
+interface ApiQuestion {
+  id: number
+  text: string
+  options: string[]
+  question_number: number
+}
+
 export function ExamInterface({ examState, config, onUpdateState }: ExamInterfaceProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedLanguage, setSelectedLanguage] = useState("english")
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null)
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false)
+  const [currentApiQuestion, setCurrentApiQuestion] = useState<ApiQuestion | null>(null)
+  const [loadingQuestion, setLoadingQuestion] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  const getQuestion = async () => {
+  const TOTAL_QUESTIONS = 30
+
+  const getQuestion = async (questionNumber: number) => {
+    setLoadingQuestion(true)
+    setError(null)
     try {
       const response = await axios.get("https://schoozy.in/api/exam/get-question", {
         params: {
-          question_number: examState.currentQuestion,
+          question_number: questionNumber,
         },
       })
-      console.log(response.data)
+      
+      if (response.data && response.data.success) {
+        setCurrentApiQuestion(response.data.data)
+        return response.data.data
+      } else {
+        throw new Error(response.data?.message || "Failed to fetch question")
+      }
     } catch (error) {
       console.error("Failed to fetch question:", error)
+      setError("Failed to load question. Please try again.")
+      return null
+    } finally {
+      setLoadingQuestion(false)
     }
   }
 
-  // Mock questions data
-  const mockQuestions: Question[] = Array.from({ length: config.totalQuestions }, (_, i) => ({
-    id: i + 1,
-    text: `This is question ${i + 1}. What is the correct answer for this multiple choice question?`,
-    options: [
-      `Option A for question ${i + 1}`,
-      `Option B for question ${i + 1}`,
-      `Option C for question ${i + 1}`,
-      `Option D for question ${i + 1}`,
-    ],
-    selectedAnswer: undefined,
-    isMarkedForReview: false,
-    isAnswered: false,
-  }))
+  // Initialize questions array with placeholder data
+  const initializeQuestionsArray = () => {
+    return Array.from({ length: TOTAL_QUESTIONS }, (_, i) => ({
+      id: i + 1,
+      text: "",
+      options: [],
+      selectedAnswer: undefined,
+      isMarkedForReview: false,
+      isAnswered: false,
+    }))
+  }
 
   useEffect(() => {
-    // Initialize questions and camera
+    // Initialize exam
     const initializeExam = async () => {
       setIsLoading(true)
 
-      await getQuestion()
+      // Initialize questions array
+      const initialQuestions = initializeQuestionsArray()
+      onUpdateState({ questions: initialQuestions })
 
-      // Simulate loading questions
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      onUpdateState({ questions: mockQuestions })
+      // Load first question
+      await getQuestion(1)
 
       // Start camera
       try {
@@ -90,7 +111,14 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
         streamRef.current.getTracks().forEach((track) => track.stop())
       }
     }
-  }, []) // Added dependency array
+  }, [])
+
+  useEffect(() => {
+    // Load question when current question changes
+    if (examState.currentQuestion && examState.questions.length > 0) {
+      getQuestion(examState.currentQuestion)
+    }
+  }, [examState.currentQuestion])
 
   useEffect(() => {
     // Update selected answer when question changes
@@ -105,7 +133,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
     if (examState.timeRemaining <= 0 && !examState.isSubmitted) {
       handleSubmitExam()
     }
-  }, [examState.timeRemaining]) // Added dependency array
+  }, [examState.timeRemaining])
 
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600)
@@ -149,11 +177,13 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
   }
 
   const saveResponse = async () => {
+    if (!currentApiQuestion) return
+    
     try {
       const response = await axios.post("https://schoozy.in/api/exam/submit-answer", {
         question_number: examState.currentQuestion,
-        question_id: 51, // You might want to use the actual question ID
-        answer: selectedAnswer !== null ? String.fromCharCode(65 + selectedAnswer) : "", // Convert 0,1,2,3 to A,B,C,D
+        question_id: currentApiQuestion.id,
+        answer: selectedAnswer !== null ? String.fromCharCode(65 + selectedAnswer) : "",
         time_taken: 34 // You might want to track actual time taken
       })
       console.log("Response saved:", response.data)
@@ -171,12 +201,14 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
       isAnswered: selectedAnswer !== null,
     })
 
-    if (examState.currentQuestion < examState.questions.length) {
+    if (examState.currentQuestion < TOTAL_QUESTIONS) {
       onUpdateState({ currentQuestion: examState.currentQuestion + 1 })
     }
   }
 
-  const handleMarkForReviewAndNext = () => {
+  const handleMarkForReviewAndNext = async () => {
+    await saveResponse()
+    
     const currentIndex = examState.currentQuestion - 1
     updateQuestion(currentIndex, {
       selectedAnswer,
@@ -184,7 +216,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
       isMarkedForReview: true,
     })
 
-    if (examState.currentQuestion < examState.questions.length) {
+    if (examState.currentQuestion < TOTAL_QUESTIONS) {
       onUpdateState({ currentQuestion: examState.currentQuestion + 1 })
     }
   }
@@ -205,7 +237,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
   }
 
   const handleNext = () => {
-    if (examState.currentQuestion < examState.questions.length) {
+    if (examState.currentQuestion < TOTAL_QUESTIONS) {
       onUpdateState({ currentQuestion: examState.currentQuestion + 1 })
     }
   }
@@ -217,7 +249,6 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
   const handleSubmitExam = () => {
     onUpdateState({ isSubmitted: true })
     setShowSubmitConfirm(false)
-    // In a real app, this would submit to the server
     alert("Exam submitted successfully!")
   }
 
@@ -240,7 +271,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
       <div className="min-h-screen bg-gray-100 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Fetching questions from database...</p>
+          <p className="text-gray-600">Initializing exam...</p>
         </div>
       </div>
     )
@@ -259,7 +290,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
               <div className="p-6 border-b">
                 <h1 className="text-2xl font-semibold text-slate-800 mb-2">Exam</h1>
                 <p className="text-lg text-slate-700 mb-4">
-                  Question No. <span className="font-semibold">{examState.currentQuestion}</span>
+                  Question No. <span className="font-semibold">{examState.currentQuestion}</span> of {TOTAL_QUESTIONS}
                 </p>
 
                 <div className="flex items-center gap-2 mb-4">
@@ -280,12 +311,31 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
               </div>
 
               <div className="flex-1 p-6 overflow-y-auto">
-                {currentQuestion && (
+                {loadingQuestion ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="text-center">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-2"></div>
+                      <p className="text-gray-600">Loading question...</p>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="flex items-center justify-center h-64">
+                    <div className="text-center">
+                      <p className="text-red-600 mb-4">{error}</p>
+                      <Button 
+                        onClick={() => getQuestion(examState.currentQuestion)}
+                        className="bg-indigo-600 hover:bg-indigo-700"
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                ) : currentApiQuestion ? (
                   <div className="space-y-6">
-                    <p className="text-lg text-slate-800 leading-relaxed">{currentQuestion.text}</p>
+                    <p className="text-lg text-slate-800 leading-relaxed">{currentApiQuestion.text}</p>
 
                     <div className="space-y-3">
-                      {currentQuestion.options.map((option, index) => (
+                      {currentApiQuestion.options.map((option, index) => (
                         <label
                           key={index}
                           className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${
@@ -296,7 +346,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
                         >
                           <input
                             type="radio"
-                            name={`question-${currentQuestion.id}`}
+                            name={`question-${currentApiQuestion.id}`}
                             value={index}
                             checked={selectedAnswer === index}
                             onChange={() => handleAnswerSelect(index)}
@@ -307,31 +357,48 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
                       ))}
                     </div>
                   </div>
+                ) : (
+                  <div className="flex items-center justify-center h-64">
+                    <p className="text-gray-600">No question available</p>
+                  </div>
                 )}
               </div>
 
               <div className="p-6 border-t bg-gray-50">
                 <div className="flex flex-wrap gap-3">
-                  <Button onClick={handleSaveAndNext} className="bg-indigo-600 hover:bg-indigo-700">
+                  <Button 
+                    onClick={handleSaveAndNext} 
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                    disabled={loadingQuestion}
+                  >
                     Save & Next
                   </Button>
-                  <Button onClick={handleMarkForReviewAndNext} className="bg-blue-600 hover:bg-blue-700">
+                  <Button 
+                    onClick={handleMarkForReviewAndNext} 
+                    className="bg-blue-600 hover:bg-blue-700"
+                    disabled={loadingQuestion}
+                  >
                     Mark for Review & Next
                   </Button>
                   <Button
                     onClick={handleClearResponse}
                     variant="outline"
                     className="bg-gray-500 hover:bg-gray-600 text-white"
+                    disabled={loadingQuestion}
                   >
                     Clear Response
                   </Button>
-                  <Button onClick={handlePrevious} variant="outline" disabled={examState.currentQuestion === 1}>
+                  <Button 
+                    onClick={handlePrevious} 
+                    variant="outline" 
+                    disabled={examState.currentQuestion === 1 || loadingQuestion}
+                  >
                     Previous
                   </Button>
                   <Button
                     onClick={handleNext}
                     variant="outline"
-                    disabled={examState.currentQuestion === examState.questions.length}
+                    disabled={examState.currentQuestion === TOTAL_QUESTIONS || loadingQuestion}
                   >
                     Next
                   </Button>
@@ -373,17 +440,24 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
               <div className="flex-1 p-4">
                 <h3 className="font-semibold text-slate-700 mb-3">Question Palette</h3>
                 <div className="grid grid-cols-5 gap-2 mb-4">
-                  {examState.questions.map((question, index) => (
-                    <button
-                      key={question.id}
-                      onClick={() => handleQuestionJump(index + 1)}
-                      className={`w-8 h-8 text-xs font-semibold rounded ${getStatusColor(getQuestionStatus(question))} ${
-                        examState.currentQuestion === index + 1 ? "ring-2 ring-slate-800" : ""
-                      }`}
-                    >
-                      {index + 1}
-                    </button>
-                  ))}
+                  {Array.from({ length: TOTAL_QUESTIONS }, (_, i) => {
+                    const questionNumber = i + 1
+                    const question = examState.questions[i]
+                    return (
+                      <button
+                        key={questionNumber}
+                        onClick={() => handleQuestionJump(questionNumber)}
+                        disabled={loadingQuestion}
+                        className={`w-8 h-8 text-xs font-semibold rounded ${
+                          question ? getStatusColor(getQuestionStatus(question)) : "bg-red-500 text-white"
+                        } ${
+                          examState.currentQuestion === questionNumber ? "ring-2 ring-slate-800" : ""
+                        } ${loadingQuestion ? "opacity-50 cursor-not-allowed" : ""}`}
+                      >
+                        {questionNumber}
+                      </button>
+                    )
+                  })}
                 </div>
 
                 {/* Legend */}
@@ -412,7 +486,7 @@ export function ExamInterface({ examState, config, onUpdateState }: ExamInterfac
                 <Button
                   onClick={() => setShowSubmitConfirm(true)}
                   className="w-full bg-red-600 hover:bg-red-700"
-                  disabled={examState.isSubmitted}
+                  disabled={examState.isSubmitted || loadingQuestion}
                 >
                   Submit Exam
                 </Button>
